@@ -1,21 +1,35 @@
 <?php
 
-class Vod {
+class Vod {  //? class name
 
-    public static function transform(&$movie)
+    public static function transform(&$movie) //? function name
     {
-        $app = JFactory::getApplication();
-        $input = $app->input;
+        $application = JFactory::getApplication();
+        $input = $application->input;
+		
+		$objType = ItemType::oldSchemaTypeToNewMapping($movie->type);
+        $fields = Api::getQueryParameters()->getFieldSets()[$objType] ?? null;
+		
         $movie->actor = json_decode($movie->actor);
         $movie->director = json_decode($movie->director);
         $movie->languages = json_decode($movie->languages);
+		$genresOriginal = json_decode($movie->imdb_genre);
+       
+		$regularTitle = '/\(HD\)[ ]*/';
+		
+		
+		$genres = null;
+		$movie->default_quality = null;
+		$movie->languages = null;
+		$userData = null;
+		$movie->deflang = null;
+	    $movie->sdeflang = null;
+		
         if (strlen($movie->picture_large) == 0) {
             $movie->picture_large = $movie->picture_large_original ?? null;
         }
-
-        $objType = ItemType::oldSchemaTypeToNewMapping($movie->type);
-        $fields = Api::getQueryParameters()->getFieldSets()[$objType] ?? null;
-
+		
+		// ? maybe there need function getQuality()
         if (self::shallIAddThis($fields, 'quality') && isset($movie->qualities) && json_decode($movie->qualities) != null) {
             $movie->quality = StreamQuality::getStreamQuality(json_decode($movie->qualities));
         }
@@ -25,66 +39,38 @@ class Vod {
 
         if (isset($defaultQuality) && count($defaultQuality) > 0) {
             $movie->default_quality = $defaultQuality[0];
-        } else {
-            $movie->default_quality = null;
         }
-
-        $movie->title = preg_replace('/\(HD\)[ ]*/', '', $movie->title, 1);
-        $movie->title_original = preg_replace('/\(HD\)[ ]*/', '', $movie->title_original, 1);
+		
+		$movie->title = preg_replace(regularTitle, '', $movie->title, 1);
+        $movie->title_original = preg_replace(regularTitle, '', $movie->title_original, 1);
 
         //IMDB genre lookup for translation
-        $db = JFactory::getDbo();
-        $lang = JFactory::getLanguage();
-        $query = $db->getQuery(true);
-        $query
-            ->select($db->quoteName('g.title_original'))
-            ->select("coalesce(NULLIF(g.title, ''), g.title_original) as  title")
-            ->from($db->quoteName('#__vod_genre', 'g'))
-            ->where($db->quoteName('g.lang') . '=' . $db->quote($lang->getTag()))
-            ->where($db->quoteName('g.state') . ' = 1 ');
-        $db->setQuery($query);
+		$db = queryTitles();
         $genreTranslation = $db->loadAssocList("title_original", "title");
-
-        $genresOriginal = json_decode($movie->imdb_genre);
-        $genres = null;
+        
         //warning fix "Invalid argument supplied for foreach()"
         if ($genresOriginal != null) {
             foreach ($genresOriginal as $genre) {
-                $genres[] = $genreTranslation[$genre] ?? '';
-            }
-        }
-        $movie->imdb_genre = $genres;
-        if (self::shallIAddThis($fields, 'language') || self::shallIAddThis($fields, 'default-language')) {
-            $movie->languages = ($movie->languages) ? StreamLanguage::getStreamLanguages($movie->languages) : [];
-        } else {
-            $movie->languages = null;
-
-        }
-
-        $userData = null;
-
-        if (self::shallIAddThis($fields, "default-language") || self::shallIAddThis($fields, "default-subtitle-language")) {
-            $tokendata = json_decode($input->getString('tokendata'));
-            $userId = $tokendata->user_id ?? null;
-            if ($userId) {
-                $profile = $tokendata->profile??(Profile::getFirstProfileId($userId));
-                if($profile){
-                    $query = $db->getQuery(true);
-                    if ($userId != null) {
-                        $query->select('*')
-                            ->from('#__user_settings')
-                            ->where($db->quoteName('profile_id') . ' = ' . $db->quote($profile));
-                        $db->setQuery($query);
-                        $userData = $db->loadObject();
-                    }
-                }
+               $genres[] = $genreTranslation[$genre] ?? ''; 
             }
         }
 		
+        $movie->imdb_genre = $genres;
+		
+        if (self::shallIAddThis($fields, 'language') || self::shallIAddThis($fields, 'default-language')) {
+            $movie->languages = ($movie->languages) ? StreamLanguage::getStreamLanguages($movie->languages) : [];
+        } 
+            
+        if (self::shallIAddThis($fields, "default-language") || self::shallIAddThis($fields, "default-subtitle-language")) {
+			 $userData = getUserData();
+		}
+		
+		$streamLanguages = [];
+		// ? maybe there need function checkLanguage()
         if (self::shallIAddThis($fields, "default-language")) {
-            $ordering = 0;
-            $needsBreak = false;
-            $streamLanguages = [];
+			$ordering = 0;
+            $needsBreak = false; 
+           
             if ($userData != null && isset($userData->lang)) {
                 $preferred = json_decode($userData->lang);
                 foreach ($preferred as $pLang) {
@@ -103,18 +89,16 @@ class Vod {
                 }
             }
         }
+		
         //Stream language map
         if (isset($streamLanguages[0])) {
             $movie->deflang = $streamLanguages[0];
         } elseif (empty($streamLanguages) && isset($movie->languages[0])) {
             $movie->deflang = $movie->languages[0];
-        } else {
-            $movie->deflang = null;
-        }
+        } 
+            
         if (self::shallIAddThis($fields, 'subtitles') || self::shallIAddThis($fields, 'default-subtitle-language')) {
-
             $movieSubtitles = json_decode($movie->subtitles);
-
             $subtitleObj = new Subtitle();
             if (count($movieSubtitles) > 0) {
                 $movie->subtitles = $subtitleObj::getSubtitleLanguages($movieSubtitles);
@@ -124,11 +108,10 @@ class Vod {
                 $movieSubtitles = ['-'];
             }
             if (self::shallIAddThis($fields, 'default-subtitle-language')) {
-                $movie->sdeflang = $subtitleObj::getDefaultSubtitle($movieSubtitles, $userData);
-            } else {
-                $movie->sdeflang = null;
+                $movie->sdeflang = $subtitleObj::getDefaultSubtitle($movieSubtitles, $userData);         
             }
         }
+		
         //Comma separated to array
         if (isset($movie->seasons) && $movie->seasons) {
             $movie->seasons = explode(",", $movie->seasons);
@@ -155,7 +138,40 @@ class Vod {
                 }
             }
         }
-
     }
-
+	
+	function queryTitles() {
+		$db = JFactory::getDbo();
+		$lang = JFactory::getLanguage();
+		$query = $db->getQuery(true);
+		$query
+			->select($db->quoteName('g.title_original'))
+			->select("coalesce(NULLIF(g.title, ''), g.title_original) as  title")
+			->from($db->quoteName('#__vod_genre', 'g'))
+			->where($db->quoteName('g.lang') . '=' . $db->quote($lang->getTag()))
+			->where($db->quoteName('g.state') . ' = 1 ');
+		$db->setQuery($query);
+				
+		return $db;
+	}
+			
+		function getUserData() {
+		$tokendata = json_decode($input->getString('tokendata'));
+        $userId = $tokendata->user_id ?? null;
+        if ($userId) {
+			$profile = $tokendata->profile??(Profile::getFirstProfileId($userId));
+			if($profile){
+				$query = $db->getQuery(true);
+				if ($userId != null) {
+					$query
+						->select('*')
+						->from('#__user_settings')
+						->where($db->quoteName('profile_id') . ' = ' . $db->quote($profile));
+					$db->setQuery($query);
+						
+					return $db->loadObject();
+				}
+			}
+        }
+    }
 }
